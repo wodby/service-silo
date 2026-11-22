@@ -1,0 +1,162 @@
+name: silo
+type: datastore
+icon: silo
+title: Silo
+scalable: false
+guidance: GUIDANCE.md
+
+labels:
+- s3
+- object-storage
+
+# Silo is an S3-compatible object storage server, a maintained fork of MinIO.
+options:
+- version: '2026'
+  default: true
+  tag: RELEASE.2026-11-12T00-00-00Z
+
+# The S3 API. Apps reach it inside the cluster; an app that hands out
+# presigned URLs to browsers, such as Plane, sends them through its own
+# address.
+endpoints:
+- name: silo
+  ports:
+  - name: s3
+    number: 9000
+    protocol: http
+    main: true
+    private: true
+
+tokens:
+- name: access_key
+  generate:
+    regex: '[a-z0-9]{20}'
+- name: secret_key
+  generate:
+    regex: '[A-Za-z0-9]{40}'
+
+env:
+- name: MINIO_ROOT_USER
+  value: '{{access_key}}'
+- name: MINIO_ROOT_PASSWORD
+  value: '{{secret_key}}'
+  secret: true
+# No web console: buckets and objects are managed by the apps through the S3 API.
+- name: MINIO_BROWSER
+  value: 'off'
+- name: MINIO_UPDATE
+  value: 'off'
+
+volumes:
+- name: data
+  title: Objects
+  size: 10
+  helm:
+    labels: persistence.labels
+    values:
+    - name: persistence.enabled
+      value: true
+    - name: persistence.existingClaim
+      value: '{{volumes.data.claim}}'
+    - name: persistence.size
+      value: '{{volumes.data.size}}Gi'
+
+deployment:
+  minReady: 10s
+  shutdownGracePeriod: 30s
+
+helm:
+  name: wodby
+  source: oci://registry-1.docker.io/wodby/stateful
+  chart: oci://registry-1.docker.io/wodby/stateful
+  version: 0.4.0
+  valueMappings:
+    replicas: replicaCount
+    nameOverride: nameOverride
+    fullnameOverride: fullnameOverride
+    serviceAccountName: serviceAccount.name
+    serviceAccountCreate: serviceAccount.create
+    strategy: updateStrategy.type
+    minReady: minReadySeconds
+    shutdownGracePeriod: terminationGracePeriodSeconds
+  values:
+  - name: containerName
+    value: silo
+  - name: args
+    value:
+    - server
+    - /data
+  - name: containerPorts
+    value:
+    - name: s3
+      containerPort: 9000
+      protocol: TCP
+  - name: headlessService.enabled
+    value: false
+  - name: persistence.mountPath
+    value: /data
+  - name: podSecurityContext
+    value:
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
+  # The image runs as root by default; Silo writes only to its data volume.
+  - name: securityContext
+    value:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+  - name: startupProbe
+    value:
+      httpGet:
+        path: /minio/health/live
+        port: s3
+      failureThreshold: 60
+      periodSeconds: 5
+  - name: readinessProbe
+    value:
+      httpGet:
+        path: /minio/health/ready
+        port: s3
+      periodSeconds: 10
+      timeoutSeconds: 5
+  - name: livenessProbe
+    value:
+      httpGet:
+        path: /minio/health/live
+        port: s3
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 6
+
+workloads:
+- name: main
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: '{{helm.release}}'
+  kind: statefulset
+  primary: true
+  helm:
+    labels: podLabels
+    annotations: podAnnotations
+    volumes: extraVolumes
+  containers:
+  - name: silo
+    image: pgsty/silo
+    resources:
+      request:
+        cpu: 10
+        memory: 112
+      limit:
+        memory: 1024
+    helm:
+      resources: resources
+      env: envVars
+      mounts: extraVolumeMounts
+      image:
+        repository: image.repository
+        tag: image.tag
+        registry: image.registry
+        pullPolicy: image.pullPolicy
+
+workspace: false
