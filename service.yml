@@ -18,6 +18,7 @@ options:
 # The S3 API. Apps reach it inside the cluster; an app that hands out
 # presigned URLs to browsers, such as Plane, sends them through its own
 # address.
+  digest: sha256:c20d112390b9a9ce8c11b8af95ad35bcaa62f4759663c09c936cd8d2b511f329
 endpoints:
 - name: silo
   ports:
